@@ -1,0 +1,11 @@
+replicaCount: 1
+image:
+  repository: cr9ver/python-app-5
+  pullPolicy: IfNotPresent
+  tag: python-app-5-dev-latest
+
+
+resources:
+  requests:
+    memory: "40m"
+    cpu: "40m"

@@ -1,0 +1,94 @@
+name: python-app-5-cicd
+
+on:
+  push:
+    paths:
+        - src/**
+    branches:
+      - main
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Shorten commit ID
+        shell: bash
+        run: echo "COMMIT_ID=${GITHUB_SHA::6}" >> "$GITHUB_ENV"
+      -
+        name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      -
+        name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          push: true
+          tags: cr9ver/python-app-5:${{ env.COMMIT_ID }}
+    outputs:
+      commit_id: ${{ env.COMMIT_ID }}
+  
+  cd:
+    needs: ci
+    runs-on: self-hosted
+    steps:
+
+      - uses: actions/checkout@v3
+      - name: Modify values file
+        shell: bash
+        run: |
+          echo ${{needs.ci.outputs.commit_id}}
+          sudo apt update && sudo apt install pip -y 
+          sudo apt install yq -y 
+          yq -Yi '.image.tag = "${{needs.ci.outputs.commit_id}}"' charts/python-app-5/values-dev.yaml
+
+      - name: Commit changes
+        uses: EndBug/add-and-commit@v9
+        with:
+          message: "Update values.yaml image tag with commit ID ${{needs.ci.outputs.commit_id}}"
+
+      - name: Install ArrgoCD CLI
+        shell: bash
+        run: |
+          cd /home/runner
+          curl -sSL -o argocd-linux-amd64 https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64
+          sudo install -m 555 argocd-linux-amd64 /usr/local/bin/argocd
+          rm argocd-linux-amd64
+      
+      - name: argocd login
+        shell: bash
+        run: |
+
+          argocd login agrocd-argocd-server.argocd \
+          --insecure \
+          --grpc-web \
+          --username admin \
+          --password ${{ secrets.ARGOCD_PASSWORD }}
+
+      - name: Add argocd repo and app
+        shell: bash
+        run: |
+
+          # Connects the argocd repo
+          repo="https://github.com/cr9verorg/python-app-5.git "
+          argocd repo list | grep -q $repo || argocd repo add $repo
+
+          # Creates the argocd app
+          argocd app get python-app-5 || argocd app create python-app-5 \
+            --repo $repo \
+            --path charts/python-app-5 \
+            --dest-namespace dev \
+            --dest-server https://kubernetes.default.svc \
+            --values values-dev.yaml \
+            --revision main \
+            --sync-policy manual \
+            --sync-option CreateNamespace=true
+
+      - name: Argocd app sync
+        shell: bash
+        run: |
+          argocd app sync python-app-5
+          argocd app wait python-app-5 --health --timeout 180
+
+  
